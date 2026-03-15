@@ -512,15 +512,21 @@ def handle_custom_script3():
             try:
                 if at_contact:
                     # Found an existing contact — update it to be billing contact
-                    at_contact_id = at_contact.get("id")
+                    at_contact_id = int(at_contact.get("id"))
                     console.print(f"  [green]- Found existing AT contact: {at_contact.get('firstName')} {at_contact.get('lastName')} (ID: {at_contact_id})[/green]")
 
-                    update_data = {"billingContact": 1}
+                    # Include companyID so the API can resolve the contact
+                    update_data = {
+                        "companyID": int(at_id),
+                        "firstName": at_contact.get("firstName", cw_first),
+                        "lastName": at_contact.get("lastName", cw_last),
+                        "isActive": int(at_contact.get("isActive", 1)),
+                    }
                     if cw_email and not at_contact.get("emailAddress"):
                         update_data["emailAddress"] = cw_email
 
                     ATContacts.update(at_contact_id, update_data)
-                    console.print(f"  [green]- Updated contact {at_contact_id} as billing contact.[/green]")
+                    console.print(f"  [green]- Updated contact {at_contact_id}.[/green]")
                     action_taken = "Updated"
                 else:
                     # No matching contact — create a new one
@@ -530,7 +536,6 @@ def handle_custom_script3():
                         "firstName": cw_first,
                         "lastName": cw_last,
                         "isActive": 1,
-                        "billingContact": 1
                     }
                     if cw_email:
                         new_contact_data["emailAddress"] = cw_email
