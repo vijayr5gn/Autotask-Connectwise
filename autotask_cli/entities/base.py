@@ -83,7 +83,16 @@ class BaseEntity:
         if not cls.can_update:
             raise PermissionError(f"{cls.__name__} does not support update operations.")
 
-        endpoint = f"{cls.endpoint}"
+        # Handle child entities that require parent context
+        if cls.parent_endpoint and cls.parent_id_field:
+            parent_id = data.get(cls.parent_id_field)
+            if parent_id:
+                endpoint = f"{cls.parent_endpoint}/{parent_id}/{cls.endpoint}"
+            else:
+                endpoint = cls.endpoint
+        else:
+            endpoint = cls.endpoint
+
         data["id"] = entity_id
         return client.request("PATCH", endpoint, json=data)
 
