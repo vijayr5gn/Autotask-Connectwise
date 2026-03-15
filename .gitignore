@@ -1,0 +1,18 @@
+# Environment
+.env
+__pycache__/
+*.pyc
+
+# Output files
+*.csv
+test_output.txt
+
+# Windows zone identifier files
+*Zone.Identifier
+
+# WSL temp files
+wsl_*.txt
+
+# IDE
+.vscode/
+.idea/
