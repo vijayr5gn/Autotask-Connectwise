@@ -22,6 +22,7 @@ def main_menu():
             "Custom Script - [AT -> CW] Get Billing Contacts from CW",
             "Custom Script - [AT -> AT] Update Contacts to Billing contacts in AT",
             "Custom Script - [CW -> AT] Sync Billing Contacts to Autotask",
+            "Custom Script - [CW -> AT] Sync Primary Contacts to Autotask",
             "Exit"
         ]
 
@@ -43,6 +44,10 @@ def main_menu():
 
         if category == "Custom Script - [CW -> AT] Sync Billing Contacts to Autotask":
             handle_custom_script3()
+            continue
+
+        if category == "Custom Script - [CW -> AT] Sync Primary Contacts to Autotask":
+            handle_custom_script4()
             continue
 
         # Second level: pick an entity within the selected category
@@ -583,6 +588,200 @@ def handle_custom_script3():
         if results:
             timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             filename = f"cw-at-billing-sync-{timestamp}.csv"
+
+            try:
+                with open(filename, 'w', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=results[0].keys())
+                    writer.writeheader()
+                    writer.writerows(results)
+                console.print(f"\n[green]Results exported to {filename}[/green]")
+            except Exception as export_err:
+                console.print(f"[red]Error exporting CSV: {export_err}[/red]")
+        else:
+            console.print("\n[yellow]No records to export.[/yellow]")
+
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+
+
+def handle_custom_script4():
+    """CW -> AT: Find CW default (primary) contacts, match or create in Autotask, set as primaryContact."""
+    import csv
+    from datetime import datetime
+    from autotask_cli.entities.registry import Companies as ATCompanies, Contacts as ATContacts
+
+    limit_str = questionary.text("How many Autotask companies to process? (Leave empty for ALL):").ask()
+    limit = None
+    if limit_str:
+        try:
+            limit = int(limit_str)
+        except:
+            limit = None
+
+    if limit is None:
+        console.print("[yellow]Fetching ALL companies from Autotask. This may take a while...[/yellow]")
+    else:
+        console.print(f"[bold]Fetching first {limit} companies from Autotask...[/bold]")
+
+    try:
+        at_companies = ATCompanies.list(limit=limit)
+        total_at = len(at_companies)
+        console.print(f"[green]Found {total_at} Autotask companies.[/green]")
+
+        results = []
+        skipped = 0
+        for i, at_comp in enumerate(at_companies, 1):
+            at_id = at_comp.get("id")
+            at_name = at_comp.get("companyName")
+            if not at_name:
+                continue
+
+            console.print(f"\n[{i}/{total_at}] Processing '{at_name}' (AT ID: {at_id})...")
+
+            # ----- Step 1: Find matching company in ConnectWise -----
+            safe_name = at_name.replace('"', '""')
+            cw_comps = CWCompanies.list(filters=f'name="{safe_name}"')
+
+            if not cw_comps:
+                console.print(f"  [yellow]- No matching company in ConnectWise. Skipping.[/yellow]")
+                skipped += 1
+                continue
+
+            cw_comp = cw_comps[0]
+            cw_id = cw_comp.get("id")
+            cw_name = cw_comp.get("name")
+            console.print(f"  [cyan]- CW match: {cw_name} (CW ID: {cw_id})[/cyan]")
+
+            # ----- Step 2: Get CW default (primary) contact details -----
+            default_contact_info = cw_comp.get("defaultContact")
+
+            if not default_contact_info:
+                console.print(f"  [yellow]- No default contact set in ConnectWise. Skipping.[/yellow]")
+                skipped += 1
+                continue
+
+            dc_cw_id = default_contact_info.get("id")
+            dc_cw_name = default_contact_info.get("name", "")
+
+            # Parse name into first/last
+            name_parts = dc_cw_name.split(" ", 1) if dc_cw_name else []
+            cw_first = name_parts[0] if len(name_parts) >= 1 else "Primary"
+            cw_last = name_parts[1] if len(name_parts) >= 2 else "Contact"
+
+            # Get email from the CW contact record
+            cw_email = ""
+            if dc_cw_id:
+                try:
+                    cw_contact_detail = CWContacts.get(dc_cw_id)
+                    if cw_contact_detail:
+                        comms = cw_contact_detail.get("communicationItems", [])
+                        for item in comms:
+                            if item.get("communicationType") == "Email" and item.get("defaultFlag"):
+                                cw_email = item.get("value", "")
+                                break
+                except:
+                    pass
+
+            console.print(f"  [cyan]- CW primary contact: {cw_first} {cw_last} ({cw_email or 'no email'})[/cyan]")
+
+            # ----- Step 3: Search for matching contact in Autotask -----
+            at_contact_id = None
+            at_contact = None
+            action_taken = "Skipped"
+
+            try:
+                at_contacts = ATContacts.list(filters=[
+                    {"op": "eq", "field": "companyID", "value": at_id}
+                ])
+
+                if at_contacts:
+                    # Try to match by email first (most reliable)
+                    if cw_email:
+                        for c in at_contacts:
+                            if c.get("emailAddress", "").lower().strip() == cw_email.lower().strip():
+                                at_contact = c
+                                break
+
+                    # Fallback: match by name
+                    if not at_contact:
+                        for c in at_contacts:
+                            c_first = (c.get("firstName") or "").lower().strip()
+                            c_last = (c.get("lastName") or "").lower().strip()
+                            if c_first == cw_first.lower().strip() and c_last == cw_last.lower().strip():
+                                at_contact = c
+                                break
+
+            except Exception as e:
+                console.print(f"  [red]- Error searching AT contacts: {e}[/red]")
+                continue
+
+            # ----- Step 4: Update existing or create new AT contact -----
+            try:
+                if at_contact:
+                    at_contact_id = int(at_contact.get("id"))
+                    console.print(f"  [green]- Found existing AT contact: {at_contact.get('firstName')} {at_contact.get('lastName')} (ID: {at_contact_id})[/green]")
+
+                    update_data = {
+                        "companyID": int(at_id),
+                        "firstName": at_contact.get("firstName", cw_first),
+                        "lastName": at_contact.get("lastName", cw_last),
+                        "isActive": int(at_contact.get("isActive", 1)),
+                        "primaryContact": True,
+                    }
+                    if cw_email and not at_contact.get("emailAddress"):
+                        update_data["emailAddress"] = cw_email
+
+                    ATContacts.update(at_contact_id, update_data)
+                    console.print(f"  [green]- Set contact {at_contact_id} as Primary Contact.[/green]")
+                    action_taken = "Updated"
+                else:
+                    console.print(f"  [yellow]- No matching contact in Autotask. Creating new one...[/yellow]")
+                    new_contact_data = {
+                        "companyID": int(at_id),
+                        "firstName": cw_first,
+                        "lastName": cw_last,
+                        "isActive": 1,
+                        "primaryContact": True,
+                    }
+                    if cw_email:
+                        new_contact_data["emailAddress"] = cw_email
+
+                    create_result = ATContacts.create(new_contact_data)
+                    at_contact_id = create_result.get("itemId")
+
+                    if not at_contact_id:
+                        console.print(f"  [red]- Failed to create contact (no ID returned).[/red]")
+                        continue
+
+                    console.print(f"  [green]- Created new Primary Contact (ID: {at_contact_id}).[/green]")
+                    action_taken = "Created"
+
+            except Exception as e:
+                console.print(f"  [red]- Error updating/creating AT contact: {e}[/red]")
+                continue
+
+            results.append({
+                "AT Company ID": at_id,
+                "AT Company Name": at_name,
+                "CW Company ID": cw_id,
+                "CW Company Name": cw_name,
+                "Action": action_taken,
+                "AT Contact ID": at_contact_id,
+                "Contact Name": f"{cw_first} {cw_last}",
+                "Contact Email": cw_email or "N/A"
+            })
+
+        # ----- Summary & CSV export -----
+        console.print(f"\n{'='*60}")
+        console.print(f"[bold]SUMMARY[/bold]")
+        console.print(f"  Total AT companies processed: {total_at}")
+        console.print(f"  Matched & synced:             {len(results)}")
+        console.print(f"  Skipped (no CW match/contact):{skipped}")
+        console.print(f"{'='*60}")
+
+        if results:
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            filename = f"cw-at-primary-sync-{timestamp}.csv"
 
             try:
                 with open(filename, 'w', newline='') as f:
