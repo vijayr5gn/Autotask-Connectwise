@@ -521,6 +521,7 @@ def handle_custom_script3():
                         "firstName": at_contact.get("firstName", cw_first),
                         "lastName": at_contact.get("lastName", cw_last),
                         "isActive": int(at_contact.get("isActive", 1)),
+                        "billingContact": True,
                     }
                     if cw_email and not at_contact.get("emailAddress"):
                         update_data["emailAddress"] = cw_email
@@ -536,6 +537,7 @@ def handle_custom_script3():
                         "firstName": cw_first,
                         "lastName": cw_last,
                         "isActive": 1,
+                        "billingContact": True,
                     }
                     if cw_email:
                         new_contact_data["emailAddress"] = cw_email
