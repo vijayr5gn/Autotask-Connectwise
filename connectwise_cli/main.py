@@ -516,12 +516,14 @@ def handle_custom_script3():
                     console.print(f"  [green]- Found existing AT contact: {at_contact.get('firstName')} {at_contact.get('lastName')} (ID: {at_contact_id})[/green]")
 
                     # Include companyID so the API can resolve the contact
+                    # primaryContact = Main Billing Contact on the Company page
                     update_data = {
                         "companyID": int(at_id),
                         "firstName": at_contact.get("firstName", cw_first),
                         "lastName": at_contact.get("lastName", cw_last),
                         "isActive": int(at_contact.get("isActive", 1)),
                         "billingContact": True,
+                        "primaryContact": True,
                     }
                     if cw_email and not at_contact.get("emailAddress"):
                         update_data["emailAddress"] = cw_email
@@ -538,6 +540,7 @@ def handle_custom_script3():
                         "lastName": cw_last,
                         "isActive": 1,
                         "billingContact": True,
+                        "primaryContact": True,
                     }
                     if cw_email:
                         new_contact_data["emailAddress"] = cw_email
@@ -556,12 +559,7 @@ def handle_custom_script3():
                 console.print(f"  [red]- Error updating/creating AT contact: {e}[/red]")
                 continue
 
-            # ----- Step 5: Update AT Company's billToContactID -----
-            try:
-                ATCompanies.update(at_id, {"billToContactID": int(at_contact_id)})
-                console.print(f"  [green]- Set company {at_id} billToContactID = {at_contact_id}.[/green]")
-            except Exception as e:
-                console.print(f"  [red]- Error updating company billing contact: {e}[/red]")
+
 
             results.append({
                 "AT Company ID": at_id,
