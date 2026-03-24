@@ -7,6 +7,7 @@ from .entities.registry import (
     Companies as CWCompanies,
     CompanyContacts as CWContacts,
     ServiceBoards,
+    ServiceTemplates,
     Priorities,
     ServiceSources,
     Impacts,
@@ -36,6 +37,7 @@ def main_menu():
             "Custom Script - [CW -> AT] Sync Billing Contacts to Autotask",
             "Custom Script - [CW -> AT] Sync Primary Contacts to Autotask",
             "Custom Script - [CW] Export Board Ticket Properties",
+            "Custom Script - [CW] Export Service Ticket Templates",
             "Exit"
         ]
 
@@ -65,6 +67,10 @@ def main_menu():
 
         if category == "Custom Script - [CW] Export Board Ticket Properties":
             handle_custom_script5()
+            continue
+
+        if category == "Custom Script - [CW] Export Service Ticket Templates":
+            handle_custom_script6()
             continue
 
         # Second level: pick an entity within the selected category
@@ -1037,6 +1043,156 @@ def handle_custom_script5():
     console.print(f"\n{'='*60}")
     console.print(f"[bold green]Done! Exported properties for {len(active_boards)} boards + global properties.[/bold green]")
     console.print(f"[bold]Total rows in CSV: {len(csv_rows)}[/bold]")
+    console.print(f"[bold]Files: {txt_file}, {csv_file}, {json_file}[/bold]")
+    console.print(f"{'='*60}")
+
+
+def handle_custom_script6():
+    """Export ConnectWise Service Ticket Templates with full details."""
+    import csv
+    import json
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    console.print("[bold cyan]Fetching all Service Ticket Templates...[/bold cyan]")
+    try:
+        templates = ServiceTemplates.list()
+    except Exception as e:
+        console.print(f"[red]Error fetching templates: {e}[/red]")
+        return
+
+    if not templates:
+        console.print("[yellow]No service ticket templates found.[/yellow]")
+        return
+
+    console.print(f"[green]Found {len(templates)} templates. Fetching full details...[/green]")
+
+    # Fetch full details for each template
+    detailed = []
+    for i, tpl in enumerate(templates, 1):
+        tid = tpl.get("id")
+        name = tpl.get("name", "N/A")
+        console.print(f"  [{i}/{len(templates)}] {name} (ID: {tid})")
+        try:
+            detail = ServiceTemplates.get(tid)
+            if detail:
+                detailed.append(detail)
+            else:
+                detailed.append(tpl)
+        except Exception:
+            detailed.append(tpl)
+
+    # Helper to safely get nested values
+    def get_nested(obj, path, default=""):
+        parts = path.split("/")
+        current = obj
+        for p in parts:
+            if isinstance(current, dict):
+                current = current.get(p, default)
+            else:
+                return default
+        return current if current is not None else default
+
+    # ===== Export TXT (human-readable template forms) =====
+    txt_file = f"cw-ticket-templates-{timestamp}.txt"
+    try:
+        lines = []
+        for tpl in detailed:
+            lines.append("=" * 60)
+            lines.append(f"TEMPLATE: {tpl.get('name', 'N/A')}")
+            lines.append(f"ID: {tpl.get('id', 'N/A')}")
+            lines.append("=" * 60)
+            lines.append("")
+            lines.append(f"  Summary:           {tpl.get('summary', '')}")
+            lines.append(f"  Service Board:     {get_nested(tpl, 'board/name')}")
+            lines.append(f"  Status:            {get_nested(tpl, 'status/name')}")
+            lines.append(f"  Type:              {get_nested(tpl, 'type/name')}")
+            lines.append(f"  Sub-Type:          {get_nested(tpl, 'subType/name')}")
+            lines.append(f"  Item:              {get_nested(tpl, 'item/name')}")
+            lines.append(f"  Priority:          {get_nested(tpl, 'priority/name')}")
+            lines.append(f"  Source:            {get_nested(tpl, 'source/name')}")
+            lines.append(f"  Impact:            {get_nested(tpl, 'impact')}")
+            lines.append(f"  Severity:          {get_nested(tpl, 'severity')}")
+            lines.append(f"  Company:           {get_nested(tpl, 'company/name')}")
+            lines.append(f"  Location:          {get_nested(tpl, 'location/name')}")
+            lines.append(f"  Department:        {get_nested(tpl, 'department/name')}")
+            lines.append(f"  Service Location:  {get_nested(tpl, 'serviceLocation/name')}")
+            lines.append(f"  Agreement:         {get_nested(tpl, 'agreement/name')}")
+            lines.append(f"  Work Type:         {get_nested(tpl, 'workType/name')}")
+            lines.append(f"  Work Role:         {get_nested(tpl, 'workRole/name')}")
+            lines.append(f"  Assigned Member:   {get_nested(tpl, 'assignedBy/name')}")
+            lines.append(f"  Budget Hours:      {tpl.get('budgetHours', '')}")
+            lines.append(f"  Assigned Notify:   {tpl.get('assignedNotifyFlag', '')}")
+
+            # Internal/description notes if present
+            desc = tpl.get("description", "")
+            internal = tpl.get("internalAnalysis", "")
+            resolution = tpl.get("resolution", "")
+            if desc:
+                lines.append(f"  Description:       {desc[:200]}")
+            if internal:
+                lines.append(f"  Internal Analysis: {internal[:200]}")
+            if resolution:
+                lines.append(f"  Resolution:        {resolution[:200]}")
+
+            lines.append("")
+            lines.append("-" * 60)
+            lines.append("")
+
+        with open(txt_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        console.print(f"[green]TXT exported: {txt_file}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error writing TXT: {e}[/red]")
+
+    # ===== Export JSON =====
+    json_file = f"cw-ticket-templates-{timestamp}.json"
+    try:
+        with open(json_file, "w", encoding="utf-8") as f:
+            json.dump(detailed, f, indent=2, default=str)
+        console.print(f"[green]JSON exported: {json_file}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error writing JSON: {e}[/red]")
+
+    # ===== Export CSV =====
+    csv_file = f"cw-ticket-templates-{timestamp}.csv"
+    try:
+        csv_rows = []
+        for tpl in detailed:
+            csv_rows.append({
+                "Template ID": tpl.get("id", ""),
+                "Template Name": tpl.get("name", ""),
+                "Summary": tpl.get("summary", ""),
+                "Board": get_nested(tpl, "board/name"),
+                "Status": get_nested(tpl, "status/name"),
+                "Type": get_nested(tpl, "type/name"),
+                "Sub-Type": get_nested(tpl, "subType/name"),
+                "Item": get_nested(tpl, "item/name"),
+                "Priority": get_nested(tpl, "priority/name"),
+                "Source": get_nested(tpl, "source/name"),
+                "Company": get_nested(tpl, "company/name"),
+                "Location": get_nested(tpl, "location/name"),
+                "Department": get_nested(tpl, "department/name"),
+                "Service Location": get_nested(tpl, "serviceLocation/name"),
+                "Agreement": get_nested(tpl, "agreement/name"),
+                "Work Type": get_nested(tpl, "workType/name"),
+                "Work Role": get_nested(tpl, "workRole/name"),
+                "Budget Hours": tpl.get("budgetHours", ""),
+            })
+
+        fieldnames = list(csv_rows[0].keys()) if csv_rows else []
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(csv_rows)
+        console.print(f"[green]CSV exported:  {csv_file}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error writing CSV: {e}[/red]")
+
+    # ===== Summary =====
+    console.print(f"\n{'='*60}")
+    console.print(f"[bold green]Done! Exported {len(detailed)} service ticket templates.[/bold green]")
     console.print(f"[bold]Files: {txt_file}, {csv_file}, {json_file}[/bold]")
     console.print(f"{'='*60}")
 
