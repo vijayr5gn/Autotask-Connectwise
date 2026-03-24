@@ -6,10 +6,15 @@ from .entities.registry import (
     ENTITY_CATEGORIES,
     Companies as CWCompanies,
     CompanyContacts as CWContacts,
-    ServiceTemplates,
-    ServiceEmailTemplates,
-    ProjectTemplates,
+    ServiceBoards,
+    Priorities,
+    ServiceSources,
+    Impacts,
+    Severities,
+    ServiceLocations,
+    SLAs,
 )
+from .client import client as cw_client
 from .cli.formatting import print_table, print_json, print_summary
 
 console = Console()
@@ -30,7 +35,7 @@ def main_menu():
             "Custom Script - [AT -> AT] Update Contacts to Billing contacts in AT",
             "Custom Script - [CW -> AT] Sync Billing Contacts to Autotask",
             "Custom Script - [CW -> AT] Sync Primary Contacts to Autotask",
-            "Custom Script - [CW] Export ALL Ticket Templates",
+            "Custom Script - [CW] Export Board Ticket Properties",
             "Exit"
         ]
 
@@ -58,7 +63,7 @@ def main_menu():
             handle_custom_script4()
             continue
 
-        if category == "Custom Script - [CW] Export ALL Ticket Templates":
+        if category == "Custom Script - [CW] Export Board Ticket Properties":
             handle_custom_script5()
             continue
 
@@ -811,104 +816,162 @@ def handle_custom_script4():
 
 
 def handle_custom_script5():
-    """Export ALL ConnectWise ticket templates (Service, Email, Project) to CSV + JSON."""
+    """Export ConnectWise service board ticket properties (form fields & dropdown options)."""
     import csv
     import json
     from datetime import datetime
 
-    TEMPLATE_TYPES = [
-        ("Service Templates",       ServiceTemplates,       "cw-service-templates"),
-        ("Service Email Templates", ServiceEmailTemplates,  "cw-email-templates"),
-        ("Project Templates",       ProjectTemplates,       "cw-project-templates"),
-    ]
-
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    def flatten(obj, parent_key="", sep="."):
-        """Flatten nested dicts/lists into dot-notation keys for CSV."""
-        items = []
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                new_key = f"{parent_key}{sep}{k}" if parent_key else k
-                if isinstance(v, dict):
-                    items.extend(flatten(v, new_key, sep).items())
-                elif isinstance(v, list):
-                    items.append((new_key, json.dumps(v)))
-                else:
-                    items.append((new_key, v))
-        return dict(items)
+    # Board-level sub-resources to fetch per board
+    BOARD_PROPERTIES = [
+        ("Types",       "service/boards/{board_id}/types",       "name",  "inactiveFlag"),
+        ("Sub-Types",   "service/boards/{board_id}/subtypes",    "name",  "inactiveFlag"),
+        ("Items",       "service/boards/{board_id}/items",       "name",  "inactiveFlag"),
+        ("Statuses",    "service/boards/{board_id}/statuses",    "name",  "closedStatus"),
+        ("Teams",       "service/boards/{board_id}/teams",       "name",  None),
+        ("Type/SubType/Item Associations", "service/boards/{board_id}/typeSubTypeItemAssociations", "type/name", None),
+    ]
 
-    grand_total = 0
+    # Global properties shared across all boards
+    GLOBAL_PROPERTIES = [
+        ("Priorities",         Priorities),
+        ("Sources",            ServiceSources),
+        ("Impacts",            Impacts),
+        ("Severities",         Severities),
+        ("Service Locations",  ServiceLocations),
+        ("SLAs",               SLAs),
+    ]
 
-    for label, entity_cls, file_prefix in TEMPLATE_TYPES:
-        console.print(f"\n{'='*60}")
-        console.print(f"[bold cyan]Fetching {label}...[/bold cyan]")
+    def fetch_paged(endpoint):
+        """Fetch all records from an endpoint with pagination."""
+        all_items = []
+        page = 1
+        while True:
+            params = {"pageSize": 1000, "page": page}
+            try:
+                data = cw_client.request("GET", endpoint, params=params)
+            except Exception:
+                break
+            if not data or not isinstance(data, list):
+                break
+            all_items.extend(data)
+            if len(data) < 1000:
+                break
+            page += 1
+        return all_items
 
+    # ===== Step 1: Fetch all service boards =====
+    console.print("[bold cyan]Fetching all Service Boards...[/bold cyan]")
+    try:
+        boards = ServiceBoards.list()
+    except Exception as e:
+        console.print(f"[red]Error fetching boards: {e}[/red]")
+        return
+
+    if not boards:
+        console.print("[yellow]No service boards found.[/yellow]")
+        return
+
+    active_boards = [b for b in boards if not b.get("inactiveFlag", False)]
+    console.print(f"[green]Found {len(boards)} boards ({len(active_boards)} active).[/green]")
+
+    # ===== Step 2: Fetch properties per board =====
+    structured_data = {"boards": [], "global_properties": {}}
+    csv_rows = []
+
+    for idx, board in enumerate(active_boards, 1):
+        board_id = board.get("id")
+        board_name = board.get("name", "Unknown")
+        console.print(f"\n[bold][{idx}/{len(active_boards)}] Board: {board_name} (ID: {board_id})[/bold]")
+
+        board_data = {"id": board_id, "name": board_name, "properties": {}}
+
+        for prop_label, endpoint_tpl, name_field, flag_field in BOARD_PROPERTIES:
+            endpoint = endpoint_tpl.format(board_id=board_id)
+            try:
+                items = fetch_paged(endpoint)
+                console.print(f"  {prop_label}: {len(items)} options")
+
+                board_data["properties"][prop_label] = items
+
+                for item in items:
+                    # Resolve nested name fields like "type/name"
+                    option_name = item
+                    for part in name_field.split("/"):
+                        if isinstance(option_name, dict):
+                            option_name = option_name.get(part, "N/A")
+                        else:
+                            option_name = "N/A"
+                            break
+
+                    active = "Yes"
+                    if flag_field:
+                        flag_val = item.get(flag_field, False)
+                        if flag_field == "inactiveFlag":
+                            active = "No" if flag_val else "Yes"
+                        elif flag_field == "closedStatus":
+                            active = "Closed" if flag_val else "Open"
+
+                    csv_rows.append({
+                        "Board": board_name,
+                        "Board ID": board_id,
+                        "Property": prop_label,
+                        "Option Name": option_name,
+                        "Option ID": item.get("id", "N/A"),
+                        "Active/Status": active,
+                    })
+
+            except Exception as e:
+                console.print(f"  [yellow]{prop_label}: Error - {e}[/yellow]")
+
+        structured_data["boards"].append(board_data)
+
+    # ===== Step 3: Fetch global properties =====
+    console.print(f"\n[bold cyan]Fetching Global Properties...[/bold cyan]")
+    for prop_label, entity_cls in GLOBAL_PROPERTIES:
         try:
             items = entity_cls.list()
+            console.print(f"  {prop_label}: {len(items)} options")
+            structured_data["global_properties"][prop_label] = items
+
+            for item in items:
+                csv_rows.append({
+                    "Board": "(Global)",
+                    "Board ID": "-",
+                    "Property": prop_label,
+                    "Option Name": item.get("name", "N/A"),
+                    "Option ID": item.get("id", "N/A"),
+                    "Active/Status": "No" if item.get("inactiveFlag", False) else "Yes",
+                })
         except Exception as e:
-            console.print(f"[yellow]  ⚠ Could not fetch {label}: {e}[/yellow]")
-            console.print(f"[yellow]  (Endpoint may not be available on your CW instance. Skipping.)[/yellow]")
-            continue
+            console.print(f"  [yellow]{prop_label}: Error - {e}[/yellow]")
 
-        if not items:
-            console.print(f"[yellow]  No {label} found.[/yellow]")
-            continue
+    # ===== Step 4: Export JSON =====
+    json_file = f"cw-board-properties-{timestamp}.json"
+    try:
+        with open(json_file, "w", encoding="utf-8") as f:
+            json.dump(structured_data, f, indent=2, default=str)
+        console.print(f"\n[green]JSON exported: {json_file}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error writing JSON: {e}[/red]")
 
-        console.print(f"[green]  Found {len(items)} {label}.[/green]")
+    # ===== Step 5: Export CSV =====
+    csv_file = f"cw-board-properties-{timestamp}.csv"
+    try:
+        fieldnames = ["Board", "Board ID", "Property", "Option Name", "Option ID", "Active/Status"]
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(csv_rows)
+        console.print(f"[green]CSV exported:  {csv_file}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error writing CSV: {e}[/red]")
 
-        # Fetch full details for each template
-        detailed = []
-        for i, item in enumerate(items, 1):
-            tid = item.get("id")
-            name = item.get("name", "N/A")
-            console.print(f"  [{i}/{len(items)}] Fetching details for '{name}' (ID: {tid})...")
-            try:
-                detail = entity_cls.get(tid)
-                if detail:
-                    detailed.append(detail)
-                else:
-                    detailed.append(item)
-            except Exception:
-                # Fall back to the list-level data if detail fetch fails
-                detailed.append(item)
-
-        # ----- Export JSON -----
-        json_file = f"{file_prefix}-{timestamp}.json"
-        try:
-            with open(json_file, "w", encoding="utf-8") as f:
-                json.dump(detailed, f, indent=2, default=str)
-            console.print(f"[green]  ✓ JSON exported: {json_file}[/green]")
-        except Exception as e:
-            console.print(f"[red]  Error writing JSON: {e}[/red]")
-
-        # ----- Export CSV -----
-        csv_file = f"{file_prefix}-{timestamp}.csv"
-        try:
-            flat_rows = [flatten(d) for d in detailed]
-            # Collect all unique keys across rows to build the header
-            all_keys = []
-            seen = set()
-            for row in flat_rows:
-                for k in row:
-                    if k not in seen:
-                        all_keys.append(k)
-                        seen.add(k)
-
-            with open(csv_file, "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=all_keys, extrasaction="ignore")
-                writer.writeheader()
-                writer.writerows(flat_rows)
-            console.print(f"[green]  ✓ CSV exported:  {csv_file}[/green]")
-        except Exception as e:
-            console.print(f"[red]  Error writing CSV: {e}[/red]")
-
-        grand_total += len(detailed)
-
-    # ----- Grand Summary -----
+    # ===== Summary =====
     console.print(f"\n{'='*60}")
-    console.print(f"[bold green]Done! Exported {grand_total} templates total.[/bold green]")
-    console.print(f"[bold]Files saved with timestamp: {timestamp}[/bold]")
+    console.print(f"[bold green]Done! Exported properties for {len(active_boards)} boards + global properties.[/bold green]")
+    console.print(f"[bold]Total rows in CSV: {len(csv_rows)}[/bold]")
     console.print(f"{'='*60}")
 
 
