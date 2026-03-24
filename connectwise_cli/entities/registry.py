@@ -365,6 +365,14 @@ class ServiceTemplates(BaseEntity):
     required_fields = ["name", "board"]
     can_delete = False
 
+class ServiceEmailTemplates(BaseEntity):
+    endpoint = "service/emailTemplates"
+    display_fields = ["id", "name", "type", "serviceBoard/name"]
+    required_fields = ["name"]
+    can_create = False
+    can_update = False
+    can_delete = False
+
 
 # =============================================================================
 # CATEGORY 3: Sales
@@ -699,6 +707,14 @@ class ProjectTickets(BaseEntity):
     endpoint = "project/tickets"
     display_fields = ["id", "summary", "project/name"]
     required_fields = ["summary", "project"]
+
+class ProjectTemplates(BaseEntity):
+    endpoint = "project/projectTemplates"
+    display_fields = ["id", "name", "description"]
+    required_fields = ["name"]
+    can_create = False
+    can_update = False
+    can_delete = False
 
 
 # =============================================================================
@@ -1277,6 +1293,7 @@ ENTITY_CATEGORIES = {
         "Service Locations": ServiceLocations,
         "Service Sign-offs": ServiceSignoffs,
         "Service Templates": ServiceTemplates,
+        "Service Email Templates": ServiceEmailTemplates,
     },
     "Sales": {
         "Opportunities": Opportunities,
@@ -1336,6 +1353,7 @@ ENTITY_CATEGORIES = {
         "Project Board Team Members": ProjectBoardTeamMembers,
         "Project Security Roles": ProjectSecurityRoles,
         "Project Tickets": ProjectTickets,
+        "Project Templates": ProjectTemplates,
     },
     "Time & Expense": {
         "Time Entries": TimeEntries,

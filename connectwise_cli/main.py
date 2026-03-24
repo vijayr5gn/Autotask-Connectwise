@@ -2,7 +2,14 @@ import sys
 import questionary
 from rich.console import Console
 from .config import config
-from .entities.registry import ENTITY_CATEGORIES, Companies as CWCompanies, CompanyContacts as CWContacts
+from .entities.registry import (
+    ENTITY_CATEGORIES,
+    Companies as CWCompanies,
+    CompanyContacts as CWContacts,
+    ServiceTemplates,
+    ServiceEmailTemplates,
+    ProjectTemplates,
+)
 from .cli.formatting import print_table, print_json, print_summary
 
 console = Console()
@@ -23,6 +30,7 @@ def main_menu():
             "Custom Script - [AT -> AT] Update Contacts to Billing contacts in AT",
             "Custom Script - [CW -> AT] Sync Billing Contacts to Autotask",
             "Custom Script - [CW -> AT] Sync Primary Contacts to Autotask",
+            "Custom Script - [CW] Export ALL Ticket Templates",
             "Exit"
         ]
 
@@ -48,6 +56,10 @@ def main_menu():
 
         if category == "Custom Script - [CW -> AT] Sync Primary Contacts to Autotask":
             handle_custom_script4()
+            continue
+
+        if category == "Custom Script - [CW] Export ALL Ticket Templates":
+            handle_custom_script5()
             continue
 
         # Second level: pick an entity within the selected category
@@ -796,6 +808,108 @@ def handle_custom_script4():
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
+
+
+def handle_custom_script5():
+    """Export ALL ConnectWise ticket templates (Service, Email, Project) to CSV + JSON."""
+    import csv
+    import json
+    from datetime import datetime
+
+    TEMPLATE_TYPES = [
+        ("Service Templates",       ServiceTemplates,       "cw-service-templates"),
+        ("Service Email Templates", ServiceEmailTemplates,  "cw-email-templates"),
+        ("Project Templates",       ProjectTemplates,       "cw-project-templates"),
+    ]
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    def flatten(obj, parent_key="", sep="."):
+        """Flatten nested dicts/lists into dot-notation keys for CSV."""
+        items = []
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                new_key = f"{parent_key}{sep}{k}" if parent_key else k
+                if isinstance(v, dict):
+                    items.extend(flatten(v, new_key, sep).items())
+                elif isinstance(v, list):
+                    items.append((new_key, json.dumps(v)))
+                else:
+                    items.append((new_key, v))
+        return dict(items)
+
+    grand_total = 0
+
+    for label, entity_cls, file_prefix in TEMPLATE_TYPES:
+        console.print(f"\n{'='*60}")
+        console.print(f"[bold cyan]Fetching {label}...[/bold cyan]")
+
+        try:
+            items = entity_cls.list()
+        except Exception as e:
+            console.print(f"[yellow]  ⚠ Could not fetch {label}: {e}[/yellow]")
+            console.print(f"[yellow]  (Endpoint may not be available on your CW instance. Skipping.)[/yellow]")
+            continue
+
+        if not items:
+            console.print(f"[yellow]  No {label} found.[/yellow]")
+            continue
+
+        console.print(f"[green]  Found {len(items)} {label}.[/green]")
+
+        # Fetch full details for each template
+        detailed = []
+        for i, item in enumerate(items, 1):
+            tid = item.get("id")
+            name = item.get("name", "N/A")
+            console.print(f"  [{i}/{len(items)}] Fetching details for '{name}' (ID: {tid})...")
+            try:
+                detail = entity_cls.get(tid)
+                if detail:
+                    detailed.append(detail)
+                else:
+                    detailed.append(item)
+            except Exception:
+                # Fall back to the list-level data if detail fetch fails
+                detailed.append(item)
+
+        # ----- Export JSON -----
+        json_file = f"{file_prefix}-{timestamp}.json"
+        try:
+            with open(json_file, "w", encoding="utf-8") as f:
+                json.dump(detailed, f, indent=2, default=str)
+            console.print(f"[green]  ✓ JSON exported: {json_file}[/green]")
+        except Exception as e:
+            console.print(f"[red]  Error writing JSON: {e}[/red]")
+
+        # ----- Export CSV -----
+        csv_file = f"{file_prefix}-{timestamp}.csv"
+        try:
+            flat_rows = [flatten(d) for d in detailed]
+            # Collect all unique keys across rows to build the header
+            all_keys = []
+            seen = set()
+            for row in flat_rows:
+                for k in row:
+                    if k not in seen:
+                        all_keys.append(k)
+                        seen.add(k)
+
+            with open(csv_file, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=all_keys, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(flat_rows)
+            console.print(f"[green]  ✓ CSV exported:  {csv_file}[/green]")
+        except Exception as e:
+            console.print(f"[red]  Error writing CSV: {e}[/red]")
+
+        grand_total += len(detailed)
+
+    # ----- Grand Summary -----
+    console.print(f"\n{'='*60}")
+    console.print(f"[bold green]Done! Exported {grand_total} templates total.[/bold green]")
+    console.print(f"[bold]Files saved with timestamp: {timestamp}[/bold]")
+    console.print(f"{'='*60}")
 
 
 if __name__ == "__main__":
