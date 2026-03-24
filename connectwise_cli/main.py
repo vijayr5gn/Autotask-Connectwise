@@ -968,10 +968,76 @@ def handle_custom_script5():
     except Exception as e:
         console.print(f"[red]Error writing CSV: {e}[/red]")
 
+    # ===== Step 6: Export human-readable TEXT template =====
+    txt_file = f"cw-board-properties-{timestamp}.txt"
+    try:
+        lines = []
+        for board_entry in structured_data["boards"]:
+            b_name = board_entry["name"]
+            b_id = board_entry["id"]
+            lines.append("=" * 60)
+            lines.append(f"BOARD: {b_name}  (ID: {b_id})")
+            lines.append("=" * 60)
+            lines.append("")
+
+            props = board_entry.get("properties", {})
+            for prop_label, prop_items in props.items():
+                lines.append(f"  {prop_label}:")
+
+                if not prop_items:
+                    lines.append("    (none)")
+                else:
+                    for item in prop_items:
+                        # Build a display name from the item
+                        name = item.get("name", "")
+                        if not name and "type" in item and isinstance(item["type"], dict):
+                            # For TypeSubTypeItem associations
+                            t = item.get("type", {}).get("name", "")
+                            st = item.get("subType", {}).get("name", "") if item.get("subType") else ""
+                            it = item.get("item", {}).get("name", "") if item.get("item") else ""
+                            parts = [p for p in [t, st, it] if p]
+                            name = " > ".join(parts) if parts else f"ID {item.get('id', '?')}"
+
+                        # Add status indicator
+                        flag = ""
+                        if item.get("inactiveFlag"):
+                            flag = " [INACTIVE]"
+                        elif item.get("closedStatus"):
+                            flag = " [CLOSED]"
+
+                        lines.append(f"    - {name}{flag}")
+
+                lines.append("")
+            lines.append("")
+
+        # Global properties section
+        lines.append("=" * 60)
+        lines.append("GLOBAL PROPERTIES (shared across all boards)")
+        lines.append("=" * 60)
+        lines.append("")
+
+        for prop_label, prop_items in structured_data.get("global_properties", {}).items():
+            lines.append(f"  {prop_label}:")
+            if not prop_items:
+                lines.append("    (none)")
+            else:
+                for item in prop_items:
+                    name = item.get("name", f"ID {item.get('id', '?')}")
+                    flag = " [INACTIVE]" if item.get("inactiveFlag") else ""
+                    lines.append(f"    - {name}{flag}")
+            lines.append("")
+
+        with open(txt_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        console.print(f"[green]TXT exported:  {txt_file}[/green]")
+    except Exception as e:
+        console.print(f"[red]Error writing TXT: {e}[/red]")
+
     # ===== Summary =====
     console.print(f"\n{'='*60}")
     console.print(f"[bold green]Done! Exported properties for {len(active_boards)} boards + global properties.[/bold green]")
     console.print(f"[bold]Total rows in CSV: {len(csv_rows)}[/bold]")
+    console.print(f"[bold]Files: {txt_file}, {csv_file}, {json_file}[/bold]")
     console.print(f"{'='*60}")
 
 
